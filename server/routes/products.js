@@ -1,140 +1,109 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Product = require('../models/Product');
-const Seller = require('../models/Seller');
 const { auth, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Get all products with filters
+// GET /api/products?search=phone&category=Electronics&page=1&limit=12
 router.get('/', async (req, res) => {
   try {
-    const { category, search, minPrice, maxPrice, sortBy, page = 1, limit = 20 } = req.query;
-    
-    let query = { isAvailable: true };
-    
-    // Category filter
-    if (category && category !== 'all') {
-      query.category = category;
-    }
-    
-    // Price filter
-    if (minPrice || maxPrice) {
-      query.price = {};
-      if (minPrice) query.price.$gte = Number(minPrice);
-      if (maxPrice) query.price.$lte = Number(maxPrice);
-    }
-    
-    // Search filter
-    if (search) {
-      query.$text = { $search: search };
-    }
-    
-    // Sort options
-    let sort = {};
-    switch (sortBy) {
-      case 'price-low':
-        sort.price = 1;
-        break;
-      case 'price-high':
-        sort.price = -1;
-        break;
-      case 'rating':
-        sort.rating = -1;
-        break;
-      case 'newest':
-        sort.createdAt = -1;
-        break;
-      default:
-        sort.createdAt = -1;
-    }
-    
-    const products = await Product.find(query)
-      .populate('sellerId', 'businessName businessAddress')
-      .sort(sort)
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-    
-    const total = await Product.countDocuments(query);
-    
-    res.json({
+    const { search, category, page = 1, limit = 12 } = req.query;
+
+    const query = { isAvailable: true };
+    if (category) query.category = new RegExp(`^${category}$`, 'i');
+    if (search) query.name = { $regex: search, $options: 'i' };
+
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+
+    const [products, total] = await Promise.all([
+      Product.find(query)
+        .populate('shopOwnerId', 'name email')
+        .sort({ createdAt: -1 })
+        .skip((pageNumber - 1) * pageSize)
+        .limit(pageSize),
+      Product.countDocuments(query)
+    ]);
+
+    return res.status(200).json({
+      success: true,
       products,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
-      total
+      pagination: {
+        page: pageNumber,
+        limit: pageSize,
+        total,
+        totalPages: Math.ceil(total / pageSize)
+      }
     });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Get product by ID
 router.get('/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id)
-      .populate('sellerId', 'businessName businessAddress businessPhone');
-    
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid product ID' });
     }
-    
-    res.json(product);
+
+    const product = await Product.findById(req.params.id).populate('shopOwnerId', 'name email');
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found' });
+    }
+
+    return res.status(200).json({ success: true, product });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Create product (sellers only)
-router.post('/', auth, authorize('seller'), async (req, res) => {
+router.post('/', auth, authorize('seller', 'admin'), async (req, res) => {
   try {
-    const seller = await Seller.findOne({ userId: req.user._id });
-    if (!seller || seller.verificationStatus !== 'approved') {
-      return res.status(403).json({ message: 'Seller not verified' });
-    }
-    
-    const product = new Product({
-      ...req.body,
-      sellerId: seller._id
-    });
-    
-    await product.save();
-    res.status(201).json(product);
+    const product = await Product.create({ ...req.body, shopOwnerId: req.user._id });
+    return res.status(201).json({ success: true, message: 'Product created', product });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(400).json({ success: false, message: error.message });
   }
 });
 
-// Update product
-router.put('/:id', auth, authorize('seller'), async (req, res) => {
+router.put('/:id', auth, authorize('seller', 'admin'), async (req, res) => {
   try {
-    const seller = await Seller.findOne({ userId: req.user._id });
-    const product = await Product.findOne({ _id: req.params.id, sellerId: seller._id });
-    
+    const product = await Product.findById(req.params.id);
     if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
+      return res.status(404).json({ success: false, message: 'Product not found' });
     }
-    
+
+    const isOwner = product.shopOwnerId.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'You can edit only your products' });
+    }
+
     Object.assign(product, req.body);
     await product.save();
-    
-    res.json(product);
+
+    return res.status(200).json({ success: true, message: 'Product updated', product });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(400).json({ success: false, message: error.message });
   }
 });
 
-// Delete product
-router.delete('/:id', auth, authorize('seller'), async (req, res) => {
+router.delete('/:id', auth, authorize('seller', 'admin'), async (req, res) => {
   try {
-    const seller = await Seller.findOne({ userId: req.user._id });
-    const product = await Product.findOneAndDelete({ _id: req.params.id, sellerId: seller._id });
-    
+    const product = await Product.findById(req.params.id);
     if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
+      return res.status(404).json({ success: false, message: 'Product not found' });
     }
-    
-    res.json({ message: 'Product deleted successfully' });
+
+    const isOwner = product.shopOwnerId.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'You can delete only your products' });
+    }
+
+    await product.deleteOne();
+    return res.status(200).json({ success: true, message: 'Product deleted' });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 

@@ -1,63 +1,53 @@
 const mongoose = require('mongoose');
 
-const productSchema = new mongoose.Schema({
-  sellerId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Seller',
-    required: true
+const productSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, 'Product name is required'],
+      trim: true,
+      minlength: [2, 'Product name must be at least 2 characters']
+    },
+    price: {
+      type: Number,
+      required: [true, 'Price is required'],
+      min: [0, 'Price cannot be negative']
+    },
+    category: {
+      type: String,
+      required: [true, 'Category is required'],
+      trim: true
+    },
+    description: {
+      type: String,
+      required: [true, 'Description is required'],
+      minlength: [10, 'Description must be at least 10 characters']
+    },
+    images: {
+      type: [String],
+      default: []
+    },
+    shopOwnerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Shop owner ID is required']
+    },
+    stock: {
+      type: Number,
+      default: 0,
+      min: [0, 'Stock cannot be negative']
+    },
+    isAvailable: {
+      type: Boolean,
+      default: true
+    }
   },
-  name: {
-    type: String,
-    required: true
-  },
-  brand: {
-    type: String,
-    required: true
-  },
-  description: {
-    type: String,
-    required: true
-  },
-  price: {
-    type: Number,
-    required: true
-  },
-  originalPrice: Number,
-  category: {
-    type: String,
-    required: true
-  },
-  subcategory: String,
-  images: [String],
-  features: [String],
-  specifications: {
-    type: Map,
-    of: String
-  },
-  stock: {
-    type: Number,
-    required: true,
-    min: 0
-  },
-  isAvailable: {
-    type: Boolean,
-    default: true
-  },
-  rating: {
-    type: Number,
-    default: 0,
-    min: 0,
-    max: 5
-  },
-  reviewCount: {
-    type: Number,
-    default: 0
+  {
+    timestamps: true,
+    versionKey: false
   }
-}, {
-  timestamps: true
-});
+);
 
-// Index for search functionality
-productSchema.index({ name: 'text', brand: 'text', description: 'text' });
+productSchema.index({ name: 'text', category: 'text', description: 'text' });
 
 module.exports = mongoose.model('Product', productSchema);
